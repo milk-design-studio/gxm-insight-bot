@@ -369,50 +369,56 @@
 </div>
 
 <script>
+// 7 fields exactly matching the recommended Productboard note structure
 const STEPS = 7;
 let step = 0;
 let insight = {
-  sourceType: '', contact: '', region: '', trying: '',
-  pain: '', quote: '', severity: '', signal: '', area: '', sowhat: ''
+  sourceType: '',   // 1. Source type
+  contact: '',      // 2. Contact
+  date: '',         // 3. Date (auto)
+  trying: '',       // 4. What they were trying to do
+  pain: '',         // 5. Friction or pain
+  quote: '',        // 6. Direct quote
+  severity: '',     // 7. Severity
+  relatedFeature: '' // Related feature or area (optional)
 };
 let awaitingChip = false;
-let chipKey = '';
 
 const questions = [
   {
     key: 'sourceType',
-    bot: "Hi! I'm here to help you capture a GXM insight quickly. First — who did this conversation happen with?",
+    bot: "Hi! I'll help you capture this insight in under 2 minutes. First — who did this conversation happen with?",
     chips: ['LSP', 'Customer', 'Sales', 'Ops', 'Internal']
   },
   {
     key: 'contact',
-    bot: "Got it. What's the name and company of the person you spoke with? (e.g. Maria, Grupo Fiscal BR — or just 'ops team' if internal)",
+    bot: "Who did you speak with? First name and company is enough — e.g. <em>Maria, Grupo Fiscal BR</em> or <em>ops team</em> if internal.",
     chips: null
   },
   {
-    key: 'region',
-    bot: "Which region are they in?",
-    chips: ['LATAM', 'EMEA', 'APAC', 'Global / Unknown']
-  },
-  {
     key: 'trying',
-    bot: "In one sentence — what were they trying to accomplish? Describe their goal, not their complaint.",
+    bot: "In one sentence — what were they trying to accomplish? Describe their <strong>goal</strong>, not their complaint.",
     chips: null
   },
   {
     key: 'pain',
-    bot: "What got in the way? Be as specific as you can — mention exact features or workflows if possible.",
+    bot: "What got in the way? Be specific — e.g. <em>\"they couldn't find the entity hierarchy\"</em> rather than <em>\"navigation was confusing\"</em>.",
     chips: null
   },
   {
     key: 'quote',
-    bot: "Do you remember anything they said directly? Even a rough paraphrase works. (Type 'skip' if nothing stands out)",
+    bot: "Do you remember a direct quote — even a rough one? One memorable line carries a lot of weight. Type <em>skip</em> if nothing stands out.",
     chips: null
   },
   {
     key: 'severity',
     bot: "How much did this affect them?",
     chips: ['Critical — blocked or losing trust', 'Significant — major friction', 'Minor — nice to have']
+  },
+  {
+    key: 'relatedFeature',
+    bot: "Last one — does this relate to an existing feature or area in Productboard? e.g. <em>Entity reporting</em>, <em>Bulk actions</em>. Type <em>skip</em> if unsure — Claude can help identify it during synthesis.",
+    chips: null
   }
 ];
 
@@ -423,10 +429,7 @@ function addMsg(who, html, delay = 0) {
       const div = document.createElement('div');
       div.className = `msg ${who}`;
       const initials = who === 'bot' ? 'AI' : 'YOU';
-      div.innerHTML = `
-        <div class="avatar ${who}-av">${initials}</div>
-        <div class="bubble">${html}</div>
-      `;
+      div.innerHTML = `<div class="avatar ${who}-av">${initials}</div><div class="bubble">${html}</div>`;
       msgs.appendChild(div);
       msgs.scrollTop = msgs.scrollHeight;
       resolve();
@@ -440,17 +443,10 @@ function showTyping() {
     const div = document.createElement('div');
     div.className = 'msg bot';
     div.id = 'typing-indicator';
-    div.innerHTML = `
-      <div class="avatar bot-av">AI</div>
-      <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
-    `;
+    div.innerHTML = `<div class="avatar bot-av">AI</div><div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
-    setTimeout(() => {
-      const el = document.getElementById('typing-indicator');
-      if (el) el.remove();
-      resolve();
-    }, 900);
+    setTimeout(() => { const el = document.getElementById('typing-indicator'); if (el) el.remove(); resolve(); }, 900);
   });
 }
 
@@ -466,7 +462,6 @@ function updateProgress() {
 
 function showChips(options, key) {
   awaitingChip = true;
-  chipKey = key;
   const msgs = document.getElementById('messages');
   const div = document.createElement('div');
   div.id = 'chips-container';
@@ -489,54 +484,40 @@ function removeChips() {
 
 async function selectChip(value, key) {
   removeChips();
-  let displayVal = value;
+  let stored = value;
   if (key === 'severity') {
-    if (value.startsWith('Critical')) { displayVal = 'Critical'; insight.severity = 'Critical'; }
-    else if (value.startsWith('Significant')) { displayVal = 'Significant'; insight.severity = 'Significant'; }
-    else { displayVal = 'Minor'; insight.severity = 'Minor'; }
-  } else {
-    insight[key] = value === 'Global / Unknown' ? 'Global' : value;
-    displayVal = insight[key];
+    stored = value.startsWith('Critical') ? 'Critical' : value.startsWith('Significant') ? 'Significant' : 'Minor';
   }
-  await addMsg('user', displayVal);
+  insight[key] = stored;
+  await addMsg('user', stored);
   step++;
   updateProgress();
   await nextStep();
 }
 
 async function nextStep() {
-  if (step >= questions.length) {
-    await finalizeInsight();
-    return;
-  }
+  if (step >= questions.length) { await finalizeInsight(); return; }
   const q = questions[step];
   await showTyping();
   await addMsg('bot', q.bot);
-  if (q.chips) {
-    showChips(q.chips, q.key);
-  } else {
-    document.getElementById('userInput').focus();
-  }
+  if (q.chips) showChips(q.chips, q.key);
+  else document.getElementById('userInput').focus();
 }
 
 async function handleSend() {
   const input = document.getElementById('userInput');
   const val = input.value.trim();
   if (!val || awaitingChip) return;
-
   input.value = '';
   autoResize(input);
   await addMsg('user', val);
-
   const q = questions[step];
   if (q) {
-    if (q.key === 'quote' && val.toLowerCase() === 'skip') {
-      insight.quote = 'No direct quote captured';
-    } else {
-      insight[q.key] = val;
-    }
+    const isSkip = val.toLowerCase() === 'skip';
+    if (q.key === 'quote') insight.quote = isSkip ? '' : val;
+    else if (q.key === 'relatedFeature') insight.relatedFeature = isSkip ? '' : val;
+    else insight[q.key] = val;
   }
-
   step++;
   updateProgress();
   await nextStep();
@@ -544,78 +525,44 @@ async function handleSend() {
 
 async function finalizeInsight() {
   document.getElementById('inputArea').style.display = 'none';
-
   await showTyping();
-  await addMsg('bot', "Perfect — I have everything I need. Let me format this as a Productboard-ready note...");
+  await addMsg('bot', "Got everything. Formatting your Productboard note now...");
   await showTyping();
 
-  // Determine signal type heuristically
-  const painLower = (insight.pain + insight.trying).toLowerCase();
-  if (painLower.includes('export') || painLower.includes('report') || painLower.includes('bulk') || painLower.includes('missing') || painLower.includes('can\'t') || painLower.includes('cannot')) {
-    insight.signal = 'Pain point';
-  } else if (painLower.includes('would be great') || painLower.includes('wish') || painLower.includes('want') || painLower.includes('need')) {
-    insight.signal = 'Feature request';
-  } else if (painLower.includes('workaround') || painLower.includes('excel') || painLower.includes('manual') || painLower.includes('instead')) {
-    insight.signal = 'Workaround';
-  } else {
-    insight.signal = 'Pain point';
-  }
-
-  // Determine GXM area heuristically
-  const allText = (insight.pain + insight.trying + insight.contact).toLowerCase();
-  if (allText.includes('report') || allText.includes('export')) insight.area = 'Reporting';
-  else if (allText.includes('onboard') || allText.includes('setup') || allText.includes('start')) insight.area = 'Onboarding';
-  else if (allText.includes('permiss') || allText.includes('access') || allText.includes('role')) insight.area = 'Permissions';
-  else if (allText.includes('search') || allText.includes('find') || allText.includes('filter')) insight.area = 'Search';
-  else if (allText.includes('integrat') || allText.includes('api') || allText.includes('connect')) insight.area = 'Integrations';
-  else if (allText.includes('data') || allText.includes('quality') || allText.includes('duplicat')) insight.area = 'Data quality';
-  else if (allText.includes('notif') || allText.includes('alert') || allText.includes('email')) insight.area = 'Notifications';
-  else insight.area = 'Entity management';
-
-  // So what
-  insight.sowhat = `${insight.sourceType} in ${insight.region} cannot ${insight.trying.toLowerCase().replace('to ', '').replace('they were trying to ', '')} — indicates a gap in ${insight.area.toLowerCase()} that may affect similar users.`;
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  insight.date = today;
 
   const badgeClass = insight.severity === 'Critical' ? 'critical' : insight.severity === 'Significant' ? 'significant' : 'minor';
-  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
-  const noteText = `SOURCE TYPE: ${insight.sourceType}
+  // Plain text version for email/copy — exactly 7 fields
+  const noteText =
+`SOURCE TYPE: ${insight.sourceType}
 CONTACT: ${insight.contact}
-DATE: ${today}
-REGION: ${insight.region}
+DATE: ${insight.date}
 
 WHAT THEY WERE TRYING TO DO:
 ${insight.trying}
 
 THE FRICTION OR PAIN:
 ${insight.pain}
-
-DIRECT QUOTE:
-"${insight.quote}"
-
+${insight.quote ? `\nDIRECT QUOTE:\n"${insight.quote}"` : ''}
 SEVERITY: ${insight.severity}
-SIGNAL TYPE: ${insight.signal}
-RELATED GXM AREA: ${insight.area}
 
-SO WHAT:
-${insight.sowhat}`;
+RELATED FEATURE OR AREA: ${insight.relatedFeature || 'To be identified during synthesis'}`;
 
   const msgs = document.getElementById('messages');
   const card = document.createElement('div');
   card.className = 'result-card';
   card.innerHTML = `
     <div class="result-header">
-      <span>Productboard note ready</span>
+      <span>Productboard note</span>
       <span class="badge ${badgeClass}">${insight.severity}</span>
     </div>
     <div class="result-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
         <div class="result-row">
-          <div class="result-label">Source</div>
+          <div class="result-label">Source type</div>
           <div class="result-value">${insight.sourceType}</div>
-        </div>
-        <div class="result-row">
-          <div class="result-label">Region</div>
-          <div class="result-value">${insight.region}</div>
         </div>
         <div class="result-row">
           <div class="result-label">Contact</div>
@@ -623,50 +570,45 @@ ${insight.sowhat}`;
         </div>
         <div class="result-row">
           <div class="result-label">Date</div>
-          <div class="result-value">${today}</div>
+          <div class="result-value">${insight.date}</div>
         </div>
       </div>
       <div class="result-row">
-        <div class="result-label">Trying to do</div>
+        <div class="result-label">What they were trying to do</div>
         <div class="result-value">${insight.trying}</div>
       </div>
       <div class="result-row">
-        <div class="result-label">Friction / pain</div>
+        <div class="result-label">The friction or pain</div>
         <div class="result-value">${insight.pain}</div>
       </div>
+      ${insight.quote ? `
       <div class="result-row">
         <div class="result-label">Direct quote</div>
         <div class="result-quote">${insight.quote}</div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
-        <div class="result-row">
-          <div class="result-label">Signal type</div>
-          <div class="result-value">${insight.signal}</div>
-        </div>
-        <div class="result-row">
-          <div class="result-label">GXM area</div>
-          <div class="result-value">${insight.area}</div>
-        </div>
+      </div>` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="result-row">
           <div class="result-label">Severity</div>
           <div class="result-value">${insight.severity}</div>
         </div>
-      </div>
-      <div class="result-row">
-        <div class="result-label">So what</div>
-        <div class="result-value">${insight.sowhat}</div>
+        <div class="result-row">
+          <div class="result-label">Related feature or area</div>
+          <div class="result-value" style="color:${insight.relatedFeature ? 'var(--text)' : 'var(--text-dim)'}">
+            ${insight.relatedFeature || 'To be identified during synthesis'}
+          </div>
+        </div>
       </div>
     </div>
     <div class="result-actions">
-      <button class="btn btn-primary" id="sendPbBtn" onclick="sendToProductboard(\`${noteText.replace(/`/g, '\\`')}\`)">
+      <button class="btn btn-primary" id="sendPbBtn" onclick="sendToProductboard(\`${noteText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
         Send to Productboard
       </button>
-      <button class="btn btn-secondary" onclick="copyNote(\`${noteText.replace(/`/g, '\\`')}\`)">
+      <button class="btn btn-secondary" onclick="copyNote(\`${noteText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
         Copy note
       </button>
-      <button class="btn btn-secondary" onclick="startOver()">Start over</button>
+      <button class="btn btn-secondary" onclick="startOver()">New insight</button>
     </div>
   `;
   msgs.appendChild(card);
@@ -686,11 +628,8 @@ function copyNote(text) {
 
 function sendToProductboard(noteText) {
   const email = document.getElementById('pbEmail').value.trim();
-  if (!email) {
-    alert('Please enter your Productboard inbox email address at the bottom of the screen first.');
-    return;
-  }
-  const subject = encodeURIComponent(`GXM Insight — ${insight.sourceType} — ${insight.area} [${insight.severity}]`);
+  if (!email) { alert('Please enter your Productboard inbox email address first.'); return; }
+  const subject = encodeURIComponent(`GXM Insight — ${insight.sourceType} — ${insight.relatedFeature || 'Unlinked'} [${insight.severity}]`);
   const body = encodeURIComponent(noteText);
   window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
   const btn = document.getElementById('sendPbBtn');
@@ -700,7 +639,7 @@ function sendToProductboard(noteText) {
 
 function startOver() {
   step = 0;
-  insight = { sourceType:'', contact:'', region:'', trying:'', pain:'', quote:'', severity:'', signal:'', area:'', sowhat:'' };
+  insight = { sourceType:'', contact:'', date:'', trying:'', pain:'', quote:'', severity:'', relatedFeature:'' };
   document.getElementById('messages').innerHTML = '';
   document.getElementById('inputArea').style.display = '';
   updateProgress();
@@ -708,10 +647,7 @@ function startOver() {
 }
 
 function handleKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
-  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
 }
 
 function autoResize(el) {
@@ -721,7 +657,7 @@ function autoResize(el) {
 
 async function init() {
   updateProgress();
-  await addMsg('bot', "Hi! I'm here to help you capture a GXM insight quickly. First — who did this conversation happen with?", 300);
+  await addMsg('bot', "Hi! I'll help you capture this insight in under 2 minutes. First — who did this conversation happen with?", 300);
   showChips(['LSP', 'Customer', 'Sales', 'Ops', 'Internal'], 'sourceType');
 }
 
