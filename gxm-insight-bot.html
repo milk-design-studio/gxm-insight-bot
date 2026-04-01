@@ -338,6 +338,36 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(26,158,110,0.1);
   }
+  .voice-btn {
+    width: 34px; height: 34px;
+    border-radius: var(--radius-sm);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .voice-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+  .voice-btn.listening { background: var(--danger-dim); border-color: var(--danger); animation: pulse 1s infinite; }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.3); }
+    50% { box-shadow: 0 0 0 5px rgba(220,38,38,0); }
+  }
+  .voice-btn svg { width: 15px; height: 15px; }
+  .chip-group { margin-left: 40px; margin-top: 8px; }
+  .chip-group-label {
+    font-size: 10.5px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.07em;
+    margin-bottom: 5px; margin-top: 10px;
+  }
+  .chip-group-label:first-child { margin-top: 0; }
+  .bubble .msg-step {
+    font-size: 10px; font-weight: 600; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;
+  }
+  .bubble .msg-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .bubble .msg-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -356,10 +386,16 @@
   <div id="inputArea">
     <div class="input-row">
       <div class="input-wrap">
-        <textarea id="userInput" placeholder="Type your answer..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <textarea id="userInput" placeholder="Type or use the mic..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
       </div>
+      <button class="voice-btn" id="voiceBtn" onclick="toggleVoice()" title="Speak your answer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="2" width="6" height="11" rx="3"/>
+          <path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>
+        </svg>
+      </button>
       <button class="send-btn" id="sendBtn" onclick="handleSend()">
-        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        <svg viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
       </button>
     </div>
     <div class="email-note">
@@ -369,58 +405,96 @@
 </div>
 
 <script>
-// 7 fields exactly matching the recommended Productboard note structure
 const STEPS = 7;
 let step = 0;
-let insight = {
-  sourceType: '',   // 1. Source type
-  contact: '',      // 2. Contact
-  date: '',         // 3. Date (auto)
-  trying: '',       // 4. What they were trying to do
-  pain: '',         // 5. Friction or pain
-  quote: '',        // 6. Direct quote
-  severity: '',     // 7. Severity
-  relatedFeature: '' // Related feature or area (optional)
-};
+let insight = { sourceType:'', contact:'', date:'', trying:'', pain:'', quote:'', severity:'', relatedFeature:'' };
 let awaitingChip = false;
+let recognition = null;
+let isListening = false;
 
+// Structured questions with headers, hints, and grouped chips where applicable
 const questions = [
   {
     key: 'sourceType',
-    bot: "Hi! I'll help you capture this insight in under 2 minutes. First — who did this conversation happen with?",
-    chips: ['LSP', 'Customer', 'Sales', 'Ops', 'Internal']
+    stepLabel: 'Step 1 of 7',
+    title: 'Source type',
+    hint: 'Who did this conversation happen with?',
+    chipGroups: [{ label: 'Select one', chips: ['LSP', 'Customer', 'Sales', 'Ops', 'Internal'] }]
   },
   {
     key: 'contact',
-    bot: "Who did you speak with? First name and company is enough — e.g. <em>Maria, Grupo Fiscal BR</em> or <em>ops team</em> if internal.",
-    chips: null
+    stepLabel: 'Step 2 of 7',
+    title: 'Contact',
+    hint: 'First name and company — e.g. <em>Maria, Grupo Fiscal BR</em>. Just "ops team" if internal.',
+    chipGroups: null
   },
   {
     key: 'trying',
-    bot: "In one sentence — what were they trying to accomplish? Describe their <strong>goal</strong>, not their complaint.",
-    chips: null
+    stepLabel: 'Step 3 of 7',
+    title: 'What were they trying to do?',
+    hint: 'Describe their <strong>goal</strong>, not their complaint. One sentence.',
+    chipGroups: [
+      { label: 'Common goals — tap or type your own', chips: [
+        'Generate a compliance report', 'Manage entity data for a client',
+        'Set up a new entity', 'Bulk update entity information',
+        'Find a specific entity', 'Share data with their team'
+      ]}
+    ]
   },
   {
     key: 'pain',
-    bot: "What got in the way? Be specific — e.g. <em>\"they couldn't find the entity hierarchy\"</em> rather than <em>\"navigation was confusing\"</em>.",
-    chips: null
+    stepLabel: 'Step 4 of 7',
+    title: 'What was the friction or pain?',
+    hint: 'Be specific — e.g. <em>"couldn\'t find the entity hierarchy"</em> beats <em>"navigation was confusing"</em>.',
+    chipGroups: [
+      { label: 'Common pain patterns — tap or describe your own', chips: [
+        'Couldn\'t find the feature', 'Process took too many steps',
+        'Had to export to Excel instead', 'No bulk action available',
+        'Missing data or field', 'Confusing navigation',
+        'Slow performance', 'Permissions blocked access'
+      ]}
+    ]
   },
   {
     key: 'quote',
-    bot: "Do you remember a direct quote — even a rough one? One memorable line carries a lot of weight. Type <em>skip</em> if nothing stands out.",
-    chips: null
+    stepLabel: 'Step 5 of 7',
+    title: 'Direct quote',
+    hint: 'The most memorable thing they said — even a rough paraphrase. Tap <strong>Skip</strong> if nothing stands out.',
+    chipGroups: [{ label: '', chips: ['Skip'] }]
   },
   {
     key: 'severity',
-    bot: "How much did this affect them?",
-    chips: ['Critical — blocked or losing trust', 'Significant — major friction', 'Minor — nice to have']
+    stepLabel: 'Step 6 of 7',
+    title: 'Severity',
+    hint: 'How much did this affect them?',
+    chipGroups: [{ label: 'Select one', chips: [
+      'Critical — blocked or losing trust',
+      'Significant — major friction',
+      'Minor — nice to have'
+    ]}]
   },
   {
     key: 'relatedFeature',
-    bot: "Last one — does this relate to an existing feature or area in Productboard? e.g. <em>Entity reporting</em>, <em>Bulk actions</em>. Type <em>skip</em> if unsure — Claude can help identify it during synthesis.",
-    chips: null
+    stepLabel: 'Step 7 of 7',
+    title: 'Related feature or area',
+    hint: 'Does this link to an existing Productboard feature? Tap a common area or type your own.',
+    chipGroups: [
+      { label: 'GXM areas', chips: [
+        'Entity management', 'Reporting', 'Onboarding',
+        'Permissions', 'Search', 'Integrations',
+        'Data quality', 'Notifications', 'Skip — identify later'
+      ]}
+    ]
   }
 ];
+
+function buildBotHtml(q) {
+  return `
+    <div class="msg-step">${q.stepLabel}</div>
+    <div class="msg-title">${q.title}</div>
+    ${q.hint ? `<div class="msg-hint">${q.hint}</div>` : ''}
+  `;
+}
 
 function addMsg(who, html, delay = 0) {
   return new Promise(resolve => {
@@ -428,8 +502,7 @@ function addMsg(who, html, delay = 0) {
       const msgs = document.getElementById('messages');
       const div = document.createElement('div');
       div.className = `msg ${who}`;
-      const initials = who === 'bot' ? 'AI' : 'YOU';
-      div.innerHTML = `<div class="avatar ${who}-av">${initials}</div><div class="bubble">${html}</div>`;
+      div.innerHTML = `<div class="avatar ${who}-av">${who === 'bot' ? 'AI' : 'YOU'}</div><div class="bubble">${html}</div>`;
       msgs.appendChild(div);
       msgs.scrollTop = msgs.scrollHeight;
       resolve();
@@ -441,12 +514,11 @@ function showTyping() {
   return new Promise(resolve => {
     const msgs = document.getElementById('messages');
     const div = document.createElement('div');
-    div.className = 'msg bot';
-    div.id = 'typing-indicator';
+    div.className = 'msg bot'; div.id = 'typing-indicator';
     div.innerHTML = `<div class="avatar bot-av">AI</div><div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
-    setTimeout(() => { const el = document.getElementById('typing-indicator'); if (el) el.remove(); resolve(); }, 900);
+    setTimeout(() => { const el = document.getElementById('typing-indicator'); if (el) el.remove(); resolve(); }, 800);
   });
 }
 
@@ -460,26 +532,41 @@ function updateProgress() {
   }
 }
 
-function showChips(options, key) {
+function showChipGroups(groups, key) {
   awaitingChip = true;
   const msgs = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.id = 'chips-container';
-  div.className = 'msg bot';
-  div.style.marginLeft = '40px';
-  div.innerHTML = `<div class="chips">${options.map(o => `<div class="chip" onclick="selectChip('${o}', '${key}')">${o}</div>`).join('')}</div>`;
-  msgs.appendChild(div);
+  const wrap = document.createElement('div');
+  wrap.id = 'chips-container';
+  wrap.className = 'chip-group';
+  groups.forEach(g => {
+    if (g.label) {
+      const lbl = document.createElement('div');
+      lbl.className = 'chip-group-label';
+      lbl.textContent = g.label;
+      wrap.appendChild(lbl);
+    }
+    const row = document.createElement('div');
+    row.className = 'chips';
+    g.chips.forEach(c => {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.textContent = c;
+      chip.onclick = () => selectChip(c, key);
+      row.appendChild(chip);
+    });
+    wrap.appendChild(row);
+  });
+  msgs.appendChild(wrap);
   msgs.scrollTop = msgs.scrollHeight;
-  document.getElementById('userInput').disabled = true;
-  document.getElementById('sendBtn').disabled = true;
+  // Still allow typing for free-text override
+  document.getElementById('userInput').disabled = false;
+  document.getElementById('sendBtn').disabled = false;
 }
 
 function removeChips() {
   const c = document.getElementById('chips-container');
   if (c) c.remove();
   awaitingChip = false;
-  document.getElementById('userInput').disabled = false;
-  document.getElementById('sendBtn').disabled = false;
 }
 
 async function selectChip(value, key) {
@@ -487,9 +574,11 @@ async function selectChip(value, key) {
   let stored = value;
   if (key === 'severity') {
     stored = value.startsWith('Critical') ? 'Critical' : value.startsWith('Significant') ? 'Significant' : 'Minor';
+  } else if (value === 'Skip' || value === 'Skip — identify later') {
+    stored = '';
   }
   insight[key] = stored;
-  await addMsg('user', stored);
+  await addMsg('user', stored || 'Skip');
   step++;
   updateProgress();
   await nextStep();
@@ -499,42 +588,77 @@ async function nextStep() {
   if (step >= questions.length) { await finalizeInsight(); return; }
   const q = questions[step];
   await showTyping();
-  await addMsg('bot', q.bot);
-  if (q.chips) showChips(q.chips, q.key);
+  await addMsg('bot', buildBotHtml(q));
+  if (q.chipGroups) showChipGroups(q.chipGroups, q.key);
   else document.getElementById('userInput').focus();
 }
 
 async function handleSend() {
   const input = document.getElementById('userInput');
   const val = input.value.trim();
-  if (!val || awaitingChip) return;
+  if (!val) return;
+  removeChips();
   input.value = '';
   autoResize(input);
   await addMsg('user', val);
   const q = questions[step];
   if (q) {
     const isSkip = val.toLowerCase() === 'skip';
-    if (q.key === 'quote') insight.quote = isSkip ? '' : val;
-    else if (q.key === 'relatedFeature') insight.relatedFeature = isSkip ? '' : val;
-    else insight[q.key] = val;
+    insight[q.key] = isSkip ? '' : val;
   }
   step++;
   updateProgress();
   await nextStep();
 }
 
+// Voice input
+function toggleVoice() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    alert('Voice input is not supported in this browser. Try Chrome.');
+    return;
+  }
+  if (isListening) {
+    recognition.stop();
+    return;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.onstart = () => {
+    isListening = true;
+    document.getElementById('voiceBtn').classList.add('listening');
+    document.getElementById('userInput').placeholder = 'Listening...';
+  };
+  recognition.onresult = (e) => {
+    const transcript = e.results[0][0].transcript;
+    document.getElementById('userInput').value = transcript;
+    autoResize(document.getElementById('userInput'));
+  };
+  recognition.onend = () => {
+    isListening = false;
+    document.getElementById('voiceBtn').classList.remove('listening');
+    document.getElementById('userInput').placeholder = 'Type or use the mic...';
+  };
+  recognition.onerror = () => {
+    isListening = false;
+    document.getElementById('voiceBtn').classList.remove('listening');
+    document.getElementById('userInput').placeholder = 'Type or use the mic...';
+  };
+  recognition.start();
+}
+
 async function finalizeInsight() {
   document.getElementById('inputArea').style.display = 'none';
   await showTyping();
-  await addMsg('bot', "Got everything. Formatting your Productboard note now...");
+  await addMsg('bot', '<div class="msg-title">All done!</div><div class="msg-hint">Formatting your Productboard note now...</div>');
   await showTyping();
 
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   insight.date = today;
-
   const badgeClass = insight.severity === 'Critical' ? 'critical' : insight.severity === 'Significant' ? 'significant' : 'minor';
 
-  // Plain text version for email/copy — exactly 7 fields
   const noteText =
 `SOURCE TYPE: ${insight.sourceType}
 CONTACT: ${insight.contact}
@@ -545,7 +669,7 @@ ${insight.trying}
 
 THE FRICTION OR PAIN:
 ${insight.pain}
-${insight.quote ? `\nDIRECT QUOTE:\n"${insight.quote}"` : ''}
+${insight.quote ? `\nDIRECT QUOTE:\n"${insight.quote}"\n` : ''}
 SEVERITY: ${insight.severity}
 
 RELATED FEATURE OR AREA: ${insight.relatedFeature || 'To be identified during synthesis'}`;
@@ -560,37 +684,15 @@ RELATED FEATURE OR AREA: ${insight.relatedFeature || 'To be identified during sy
     </div>
     <div class="result-body">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
-        <div class="result-row">
-          <div class="result-label">Source type</div>
-          <div class="result-value">${insight.sourceType}</div>
-        </div>
-        <div class="result-row">
-          <div class="result-label">Contact</div>
-          <div class="result-value">${insight.contact}</div>
-        </div>
-        <div class="result-row">
-          <div class="result-label">Date</div>
-          <div class="result-value">${insight.date}</div>
-        </div>
+        <div class="result-row"><div class="result-label">Source type</div><div class="result-value">${insight.sourceType}</div></div>
+        <div class="result-row"><div class="result-label">Contact</div><div class="result-value">${insight.contact}</div></div>
+        <div class="result-row"><div class="result-label">Date</div><div class="result-value">${insight.date}</div></div>
       </div>
-      <div class="result-row">
-        <div class="result-label">What they were trying to do</div>
-        <div class="result-value">${insight.trying}</div>
-      </div>
-      <div class="result-row">
-        <div class="result-label">The friction or pain</div>
-        <div class="result-value">${insight.pain}</div>
-      </div>
-      ${insight.quote ? `
-      <div class="result-row">
-        <div class="result-label">Direct quote</div>
-        <div class="result-quote">${insight.quote}</div>
-      </div>` : ''}
+      <div class="result-row"><div class="result-label">What they were trying to do</div><div class="result-value">${insight.trying}</div></div>
+      <div class="result-row"><div class="result-label">The friction or pain</div><div class="result-value">${insight.pain}</div></div>
+      ${insight.quote ? `<div class="result-row"><div class="result-label">Direct quote</div><div class="result-quote">${insight.quote}</div></div>` : ''}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div class="result-row">
-          <div class="result-label">Severity</div>
-          <div class="result-value">${insight.severity}</div>
-        </div>
+        <div class="result-row"><div class="result-label">Severity</div><div class="result-value">${insight.severity}</div></div>
         <div class="result-row">
           <div class="result-label">Related feature or area</div>
           <div class="result-value" style="color:${insight.relatedFeature ? 'var(--text)' : 'var(--text-dim)'}">
@@ -600,11 +702,11 @@ RELATED FEATURE OR AREA: ${insight.relatedFeature || 'To be identified during sy
       </div>
     </div>
     <div class="result-actions">
-      <button class="btn btn-primary" id="sendPbBtn" onclick="sendToProductboard(\`${noteText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)">
+      <button class="btn btn-primary" id="sendPbBtn" onclick="sendToProductboard(${JSON.stringify(noteText)})">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
         Send to Productboard
       </button>
-      <button class="btn btn-secondary" onclick="copyNote(\`${noteText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)">
+      <button class="btn btn-secondary" onclick="copyNote(${JSON.stringify(noteText)})">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
         Copy note
       </button>
@@ -630,8 +732,7 @@ function sendToProductboard(noteText) {
   const email = document.getElementById('pbEmail').value.trim();
   if (!email) { alert('Please enter your Productboard inbox email address first.'); return; }
   const subject = encodeURIComponent(`GXM Insight — ${insight.sourceType} — ${insight.relatedFeature || 'Unlinked'} [${insight.severity}]`);
-  const body = encodeURIComponent(noteText);
-  window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+  window.location.href = `mailto:${email}?subject=${subject}&body=${encodeURIComponent(noteText)}`;
   const btn = document.getElementById('sendPbBtn');
   btn.innerHTML = '✓ Opening email client...';
   btn.className = 'btn btn-success';
@@ -657,8 +758,14 @@ function autoResize(el) {
 
 async function init() {
   updateProgress();
-  await addMsg('bot', "Hi! I'll help you capture this insight in under 2 minutes. First — who did this conversation happen with?", 300);
-  showChips(['LSP', 'Customer', 'Sales', 'Ops', 'Internal'], 'sourceType');
+  const q = questions[0];
+  await addMsg('bot', `
+    <div class="msg-hint" style="margin-bottom:8px">👋 Hi! I'll help you log this insight in under 2 minutes. Most answers are just one tap.</div>
+    <div class="msg-step">${q.stepLabel}</div>
+    <div class="msg-title">${q.title}</div>
+    <div class="msg-hint">${q.hint}</div>
+  `, 300);
+  showChipGroups(q.chipGroups, q.key);
 }
 
 init();
